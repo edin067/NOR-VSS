@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Velenjsko Jezero VR</title>
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script>
+        AFRAME.registerComponent('pool-controls', {
+            schema: { speed: { type: 'number', default: 0.15 }, paused: { type: 'boolean', default: true } },
+            init: function () {
+                this.keys = {};
+                window.addEventListener('keydown', (e) => { this.keys[e.code] = true; });
+                window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
+                this.vrVelocity = new THREE.Vector2(0, 0);
+            },
+            tick: function (time, timeDelta) {
+                if (this.data.paused) return;
+                const el = this.el; const pos = el.getAttribute('position');
+                const camera = document.getElementById('main-camera'); if (!camera) return;
+                const rotation = camera.getAttribute('rotation');
+                const rad = rotation.y * Math.PI / 180;
+                let dx = 0, dy = 0, dz = 0; const speed = (this.data.speed * (timeDelta / 16)) * 2.0;
+
+                // Desktop Controls
+                if (this.keys['KeyW']) { dz -= Math.cos(rad) * speed; dx -= Math.sin(rad) * speed; }
+                if (this.keys['KeyS']) { dz += Math.cos(rad) * speed; dx += Math.sin(rad) * speed; }
+                if (this.keys['KeyA']) { dz += Math.sin(rad) * speed; dx -= Math.cos(rad) * speed; }
+                if (this.keys['KeyD']) { dz -= Math.sin(rad) * speed; dx += Math.cos(rad) * speed; }
+                if (this.keys['Space']) dy += speed;
+                if (this.keys['ShiftLeft'] || this.keys['ControlLeft'] || this.keys['KeyC']) dy -= speed;
+
+                // VR Thumbstick Movement (Oculus/Meta Quest)
+                if (this.vrVelocity.length() > 0.05) {
+                    const vx = this.vrVelocity.x; const vy = this.vrVelocity.y;
+                    dz += (vy * Math.cos(rad) + vx * Math.sin(rad)) * speed;
+                    dx += (vy * Math.sin(rad) - vx * Math.cos(rad)) * speed;
+                }
+
+                let nx = pos.x + dx; let ny = pos.y + dy; let nz = pos.z + dz;
+                const hFloorY = -375; if (ny < hFloorY) ny = hFloorY;
+                const hCeilingY = -50; if (ny > hCeilingY) ny = hCeilingY;
+                const worldLimit = 2500;
+                if (nx > worldLimit) nx = worldLimit; if (nx < -worldLimit) nx = -worldLimit;
+                if (nz > worldLimit) nz = worldLimit; if (nz < -worldLimit) nz = -worldLimit;
+
+                const c1 = { minX: -100, maxX: 100, minZ: -400, maxZ: -200, roof: 50 };
+                if (nx > c1.minX && nx < c1.maxX && nz > c1.minZ && nz < c1.maxZ && ny < c1.roof) {
+                    if (!(pos.x > c1.minX && pos.x < c1.maxX) || !(pos.z > c1.minZ && pos.z < c1.maxZ)) { nx = pos.x; nz = pos.z; }
+                }
+                el.setAttribute('position', { x: nx, y: ny, z: nz });
+            }
+        });
+
+        AFRAME.registerComponent('vr-interaction', {
+            init: function () {
+                this.el.addEventListener('triggerdown', (e) => {
+                    if (isUnderwater) { if (narrationActive) hideFish(); else showFish(); }
+                });
+                this.el.addEventListener('axismove', (evt) => {
+                    const rig = document.getElementById('rig');
+                    if (rig.getAttribute('pool-controls').paused) return;
+                    const pc = rig.components['pool-controls'];
+                    if (evt.detail.axis.length > 2) {
+                        pc.vrVelocity.set(evt.detail.axis[2], evt.detail.axis[3]);
+                    } else {
+                        pc.vrVelocity.set(evt.detail.axis[0], evt.detail.axis[1]);
+                    }
+                });
+                this.el.addEventListener('bbuttondown', () => this.togglePauseMenu());
+                this.el.addEventListener('ybuttondown', () => this.togglePauseMenu());
+            },
+            togglePauseMenu: function () {
+                const rig = document.getElementById('rig');
+                if (rig.getAttribute('pool-controls').paused) resumeGame(); else showPauseMenuManual();
+            }
+        });
+
+        AFRAME.registerComponent('pause-listener', {
+            init: function () {
+                document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement) showPauseMenuManual(); });
+                window.addEventListener('keydown', (e) => { if (e.code === 'Escape') showPauseMenuManual(); });
+            }
+        });
+    </script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: black;
+            font-family: 'Garamond', serif;
+        }
+
+        #loading {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            background: black;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            z-index: 1000;
+        }
+
+        #ui-2d {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        .menu-panel {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle, #001a33 0%, #000 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: auto;
+            color: white;
+            z-index: 200;
+        }
+
+        #ui-2d h1 {
+            font-size: 60px;
+            margin-bottom: 40px;
+            text-shadow: 0 0 20px #00aaff;
+            text-transform: uppercase;
+            letter-spacing: 5px;
+        }
+
+        .menu-btn {
+            padding: 15px 50px;
+            font-size: 24px;
+            margin: 10px;
+            cursor: pointer;
+            background: #f1c40f;
+            color: black;
+            border: none;
+            font-weight: bold;
+            border-radius: 5px;
+            width: 350px;
+            text-transform: uppercase;
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .menu-btn:hover {
+            background: #fff;
+            transform: scale(1.05);
+        }
+
+        #subtitles-2d {
+            position: absolute;
+            bottom: 8%;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #f1f1f1;
+            font-size: 28px;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 30px;
+            border-radius: 4px;
+            display: none;
+        }
+
+        #bubble-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, #001a33, #004d80);
+            z-index: 500;
+            pointer-events: none;
+            overflow: hidden;
+            display: none;
+            opacity: 0;
+            transition: opacity 0.8s;
+        }
+
+        .bubble {
+            position: absolute;
+            bottom: -100px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.1));
+            animation: rise-wobble 2.5s infinite ease-in;
+        }
+
+        @keyframes rise-wobble {
+            0% {
+                transform: translate(0, 0);
+                opacity: 0;
+            }
+
+            20% {
+                opacity: 0.7;
+            }
+
+            50% {
+                transform: translate(30px, -60vh);
+            }
+
+            100% {
+                transform: translate(-10px, -120vh);
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+
+<body onmousedown="handleMouseDown(event)">
+    <div id="loading">Nalaganje Velenjskega jezera...</div>
+    <div id="ui-2d">
+        <div id="start-menu-2d" class="menu-panel">
+            <h1>VELENJSKO JEZERO</h1>
+            <button class="menu-btn" onclick="startGame()">ZAČNI IGRO</button>
+            <button class="menu-btn" style="background: #333; color: white;"
+                onclick="showOptions(true)">MOŽNOSTI</button>
+            <button class="menu-btn" style="background: #e74c3c; color: white;" onclick="exitGame()">IZHOD</button>
+        </div>
+        <div id="pause-overlay-2d" class="menu-panel" style="display: none;">
+            <h1>IGRA PREKINJENA</h1>
+            <button class="menu-btn" onclick="resumeGame()">NASTAVI IGRO</button>
+            <button class="menu-btn" style="background: #333; color: white;"
+                onclick="showOptions(true)">MOŽNOSTI</button>
+            <button class="menu-btn" style="background: #e74c3c; color: white;" onclick="exitGame()">IZHOD IZ
+                IGRE</button>
+        </div>
+        <div id="options-panel-2d" class="menu-panel" style="display: none; background: rgba(0,0,0,0.95);">
+            <h1 style="font-size: 40px; margin-bottom: 20px;">KONTROLE</h1>
+            <div style="font-size: 20px; line-height: 1.8; text-align: center; margin-bottom: 30px; max-width: 80%;">
+                <b>W / A / S / D</b> — Premikanje (Naprej / Levo / Nazaj / Desno)<br>
+                <b>SPACE (Preslednica)</b> — Plavaj GOR<br>
+                <b>SHIFT / CTRL / C</b> — Plavaj DOL<br>
+                <b>MIŠKA (Drag)</b> — Obračanje pogleda (Swipe)<br>
+                <b>DESNI KLIK</b> — Zgodba ribice (Start / Stop)<br>
+                <b>ESC</b> — Pavza / Meni<br>
+                <br>
+                <i>V VR HEADSETU: Thumbstick za premikanje, Trigger za zgodbo.</i>
+            </div>
+            <button class="menu-btn" style="background: #555; color: white;" onclick="showOptions(false)">NAZAJ</button>
+        </div>
+        <div id="subtitles-2d"></div>
+        <div id="bubble-overlay"></div>
+    </div>
+
+    <a-scene pause-listener antialias="true" fog="type: exponential; color: #081a2d; density: 0">
+        <a-assets timeout="300000">
+            <img id="beach" src="plaza_4k.jpg">
+            <img id="underwater" src="podvodno.png">
+            <a-asset-item id="suit-m" src="odelo.glb"></a-asset-item>
+            <a-asset-item id="fish-m" src="ribica.glb"></a-asset-item>
+            <a-asset-item id="house-m" src="kuca/source/kuca.glb"></a-asset-item>
+        </a-assets>
+
+        <a-entity id="beach-scene" visible="true">
+            <a-sky src="#beach" rotation="0 -90 0" radius="1000"></a-sky>
+            <a-entity position="12 -60 -5" rotation="0 -45 0">
+                <a-entity gltf-model="#suit-m" scale="4.2 4.2 4.2" wasd-controls="enabled: false"></a-entity>
+                <a-box class="clickable" width="4" height="10" depth="4" position="0 5 0"
+                    material="opacity: 0; transparent: true" onclick="dive()"></a-box>
+                <a-text value="KLIKNI NA OBLEKO ZA POTOP" position="0 15 0" align="center" color="white"
+                    width="40"></a-text>
+            </a-entity>
+            <a-light type="ambient" intensity="2.5"></a-light>
+        </a-entity>
+
+        <a-entity id="water-scene" visible="false">
+            <a-sky src="#underwater" rotation="0 -180 0" radius="5000"></a-sky>
+            <a-entity id="main-house" gltf-model="#house-m" position="0 -400 -300" scale="1500 1500 1500"
+                rotation="0 180 0"></a-entity>
+            <a-light type="ambient" color="#223" intensity="0.6"></a-light>
+            <a-light type="directional" position="1 100 -1" color="#445" intensity="0.6"></a-light>
+            <a-entity position="0 -395 -300">
+                <a-plane position="-50 0 50" rotation="-90 0 0" width="20" height="20" color="#1a3300"
+                    material="opacity: 0.6; transparent: true"></a-plane>
+                <a-plane position="50 0 -50" rotation="-90 45 0" width="15" height="15" color="#1a3300"
+                    material="opacity: 0.5; transparent: true"></a-plane>
+                <a-plane position="0 0 100" rotation="-90 20 0" width="30" height="30" color="#1a3300"
+                    material="opacity: 0.4; transparent: true"></a-plane>
+            </a-entity>
+            <a-entity id="bg-fish-1" gltf-model="#fish-m" position="-100 -350 -500" scale="0.1 0.1 0.1"
+                animation="property: position; to: 100 -350 -500; dur: 20000; loop: true; dir: alternate"></a-entity>
+            <a-entity id="bg-fish-2" gltf-model="#fish-m" position="200 -380 -600" scale="0.08 0.08 0.08"
+                animation="property: position; to: -200 -380 -600; dur: 25000; loop: true; dir: alternate"></a-entity>
+        </a-entity>
+
+        <a-entity id="rig" position="0 0 0" pool-controls="paused: true">
+            <a-entity id="main-camera" camera position="0 1.6 0"
+                look-controls="enabled: true; pointerLockEnabled: true">
+                <a-entity id="hud-cursor" cursor="fuse: false" position="0 0 -0.5"
+                    geometry="primitive: ring; radiusInner: 0.001; radiusOuter: 0.002"
+                    material="color: #f1c40f; shader: flat" raycaster="objects: .clickable"></a-entity>
+                <a-entity id="hud-fish" gltf-model="#fish-m" position="-2.5 -0.8 -1.5" scale="0.3 0.3 0.3"
+                    rotation="0 180 0" visible="false"
+                    animation__entry="property: position; from: -2.5 -0.8 -1.5; to: -1.2 -0.8 -1.5; dur: 1200; easing: easeOutBack; startEvents: fishEntry"
+                    animation__exit="property: position; from: -1.2 -0.8 -1.5; to: -2.5 -0.8 -1.5; dur: 1200; easing: easeInBack; startEvents: fishExit">
+                    <a-text id="subtitles-vr" value="" position="1.5 -1 0" align="center" width="3" color="white"
+                        wrap-count="30"></a-text>
+                </a-entity>
+            </a-entity>
+            <a-entity oculus-touch-controls="hand: left" vr-interaction></a-entity>
+            <a-entity oculus-touch-controls="hand: right" laser-controls="hand: right"
+                raycaster="objects: .clickable; far: 100" vr-interaction></a-entity>
+        </a-entity>
+    </a-scene>
+
+    <script>
+        document.querySelector('a-scene').addEventListener('loaded', () => { document.getElementById('loading').style.display = 'none'; });
+        const story = [
+            "Živjo… vidiš te stare ruševine pod nama?",
+            "Nekoč tukaj ni bilo vode. Tukaj so stale hiše, ceste in ljudje so živeli svoje življenje v bližini mesta Velenje.",
+            "Potem pa se je zemlja začela pogrezati… zaradi rudarjenja lignita v Premogovnik Velenje.",
+            "Hiše so izginjale, dolina se je počasi spreminjala… in voda je začela prihajati.",
+            "Tako je nastalo Velenjsko jezero.",
+            "Na začetku voda ni bila čista… ampak s časom se je narava obnovila.",
+            "Danes je tukaj mirno… i jaz sem našla svoj dom.",
+            "Če dobro pogledaš… še vedno lahko vidiš ostanke starega sveta, ki počiva pod gladino."
+        ];
+        let narrationActive = false, narrationTimeout, isUnderwater = false, currentStoryIndex = 0;
+
+        let slVoice = null;
+        function loadVoices() {
+            if (!'speechSynthesis' in window) return;
+            const voices = window.speechSynthesis.getVoices();
+            slVoice = voices.find(v => v.lang.toLowerCase().includes('sl') || v.name.toLowerCase().includes('slovenian'));
+        }
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+            loadVoices();
+        }
+
+        function playSubmergeSound() {
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContext) return;
+                const ctx = new AudioContext();
+                const now = ctx.currentTime;
+                // Procedural Submersion: BOOSTED VOLUME, mid-frequency sweep.
+                const bufferSize = ctx.sampleRate * 2.0;
+                const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) { data[i] = Math.random() * 2 - 1; }
+                const noise = ctx.createBufferSource();
+                noise.buffer = buffer;
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(800, now);
+                filter.frequency.exponentialRampToValueAtTime(100, now + 1.2);
+                const gain = ctx.createGain();
+                gain.gain.setValueAtTime(0, now);
+                gain.gain.linearRampToValueAtTime(0.6, now + 0.3);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 1.8);
+                noise.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
+                noise.start(now);
+                const osc = ctx.createOscillator();
+                const tGain = ctx.createGain();
+                osc.type = 'sine'; osc.frequency.setValueAtTime(100, now);
+                osc.frequency.exponentialRampToValueAtTime(30, now + 0.5);
+                tGain.gain.setValueAtTime(0.5, now);
+                tGain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
+                osc.connect(tGain); tGain.connect(ctx.destination);
+                osc.start(now); osc.stop(now + 0.6);
+            } catch (e) { console.error("Audio error:", e); }
+        }
+
+        function startGame() {
+            const scene = document.querySelector('a-scene');
+            scene.canvas.requestPointerLock();
+            document.getElementById('ui-2d').style.display = 'none';
+            document.getElementById('start-menu-2d').style.display = 'none';
+            document.getElementById('rig').setAttribute('pool-controls', 'paused: false');
+            scene.canvas.addEventListener('click', () => {
+                if (!document.getElementById('rig').getAttribute('pool-controls').paused) { scene.canvas.requestPointerLock(); }
+            });
+        }
+
+        function showOptions(show) {
+            document.getElementById('start-menu-2d').style.display = 'none';
+            document.getElementById('pause-overlay-2d').style.display = 'none';
+            document.getElementById('options-panel-2d').style.display = show ? 'flex' : 'none';
+            if (!show) { if (isUnderwater) document.getElementById('pause-overlay-2d').style.display = 'flex'; else document.getElementById('start-menu-2d').style.display = 'flex'; }
+        }
+
+        function exitGame() { window.location.href = 'about:blank'; }
+
+        function showPauseMenuManual() {
+            document.getElementById('ui-2d').style.display = 'block';
+            document.getElementById('pause-overlay-2d').style.display = 'flex';
+            document.getElementById('rig').setAttribute('pool-controls', 'paused: true');
+            clearTimeout(narrationTimeout);
+            if (window.speechSynthesis.speaking) window.speechSynthesis.pause();
+        }
+
+        function resumeGame() {
+            document.getElementById('ui-2d').style.display = 'none';
+            document.getElementById('pause-overlay-2d').style.display = 'none';
+            document.getElementById('rig').setAttribute('pool-controls', 'paused: false');
+            if (narrationActive) {
+                document.getElementById('ui-2d').style.display = 'block';
+                document.getElementById('subtitles-2d').style.display = 'block';
+                nextStep(currentStoryIndex);
+            }
+            document.querySelector('a-scene').canvas.requestPointerLock();
+        }
+
+        function handleMouseDown(e) {
+            if (isUnderwater && e.button === 2) {
+                e.preventDefault();
+                if (narrationActive) hideFish(); else {
+                    window.speechSynthesis.cancel();
+                    showFish();
+                }
+            }
+        }
+        window.oncontextmenu = (e) => { if (isUnderwater) e.preventDefault(); return false; };
+
+        function speakText(text, onComplete) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(text);
+                if (slVoice) u.voice = slVoice;
+                u.lang = 'sl-SI'; u.rate = 0.8; u.pitch = 0.9;
+                if (onComplete) u.onend = onComplete;
+                window.speechSynthesis.speak(u);
+            }
+        }
+
+        function showFish() {
+            const fish = document.getElementById('hud-fish');
+            if (!fish) return;
+            fish.setAttribute('visible', 'true');
+            fish.emit('fishEntry');
+            document.getElementById('ui-2d').style.display = 'block';
+            document.getElementById('subtitles-2d').style.display = 'block';
+            narrationActive = true;
+            nextStep(0);
+        }
+        function hideFish() {
+            window.speechSynthesis.cancel();
+            clearTimeout(narrationTimeout);
+            document.getElementById('subtitles-2d').style.display = 'none';
+            const fish = document.getElementById('hud-fish');
+            if (fish) {
+                fish.emit('fishExit');
+                setTimeout(() => fish.setAttribute('visible', 'false'), 1200);
+            }
+            narrationActive = false;
+        }
+
+        function dive() {
+            const ui = document.getElementById('ui-2d'); const overlay = document.getElementById('bubble-overlay');
+            ui.style.display = 'block'; overlay.innerHTML = ''; overlay.style.display = 'block'; overlay.style.opacity = 1;
+            playSubmergeSound(); // BOOSTED SUBMERGE WHOOSH
+            for (let i = 0; i < 150; i++) { const b = document.createElement('div'); b.className = 'bubble'; const s = Math.random() * 55 + 5; b.style.width = s + 'px'; b.style.height = s + 'px'; b.style.left = Math.random() * 100 + '%'; b.style.animationDuration = (Math.random() * 1.2 + 1) + 's'; b.style.animationDelay = Math.random() * 0.8 + 's'; overlay.appendChild(b); }
+            setTimeout(() => {
+                isUnderwater = true;
+                document.querySelector('a-scene').setAttribute('fog', 'density: 0.0035; color: #081a2d');
+                document.getElementById('beach-scene').setAttribute('visible', 'false');
+                document.getElementById('water-scene').setAttribute('visible', 'true');
+                document.getElementById('rig').setAttribute('position', '0 -200 300');
+                setTimeout(() => { overlay.style.opacity = 0; setTimeout(() => { overlay.style.display = 'none'; ui.style.display = 'none'; }, 800); }, 500);
+            }, 1000);
+        }
+
+        function nextStep(index) {
+            if (!narrationActive || index >= story.length) {
+                if (index >= story.length) hideFish();
+                return;
+            }
+            if (document.getElementById('rig').getAttribute('pool-controls').paused) return;
+            currentStoryIndex = index;
+            const s2d = document.getElementById('subtitles-2d');
+            const svr = document.getElementById('subtitles-vr');
+            const text = story[index];
+            s2d.innerText = text; s2d.style.opacity = 1; svr.setAttribute('value', text);
+            speakText(text, () => {
+                if (narrationActive && !document.getElementById('rig').getAttribute('pool-controls').paused) {
+                    narrationTimeout = setTimeout(() => nextStep(index + 1), 750);
+                }
+            });
+        }
+    </script>
+</body>
+
+</html>

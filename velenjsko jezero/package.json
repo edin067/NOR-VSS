@@ -1,0 +1,7 @@
+{
+  "name": "velenjsko-jezero",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "npx serve -l 3001"
+  }
+}
