@@ -24,3 +24,6 @@ Ako koristite VS Code, možete instalirati ekstenziju **Live Server** i kliknuti
 
 ---
 **Napomena:** Projekat je optimizovan za rad na portu **3001**.
+
+
+https://docs.google.com/presentation/d/1t-2XTjJqQQHjdhQvN5G1TnOQTpD0jT09/edit?usp=share_link&ouid=114920405309017653495&rtpof=true&sd=true
